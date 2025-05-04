@@ -7,6 +7,7 @@ from collections import deque, defaultdict
 import copy
 import math
 from visualize import *
+from tqdm import tqdm
 
 # setting up global variables that are used for adjacency in searches
 global directions
@@ -16,6 +17,7 @@ diagonal_directions = [(0,1), (0,-1), (1,0), (-1,0), (-1,1), (-1,-1), (1,1), (1,
 
 # function to initialize ship by creating maze structure and randomly placing bot and rat
 def init_ship(dimension):
+    info = dict()
 
     # 0 = open cell
     # 1 = closed cell
@@ -109,16 +111,126 @@ def init_ship(dimension):
     # Condense all the information created within this function into a hashmap and return the hashmap
 
     empty_ship = copy.deepcopy(ship)
+
+    info['open_cell'] = open_cells
     bot_r,bot_c = random.choice(list(open_cells))
     open_cells.remove((bot_r,bot_c))
 
     ship[bot_r][bot_c] = 2
 
-    info = dict()
     info['ship'] = ship
     info['empty_ship'] = empty_ship
     info['bot'] = (bot_r, bot_c)
+    info['open_cell'] = open_cells
     return info
+
+def bot(info, visualize):
+
+    empty_ship = info['empty_ship']
+    ship = info['ship']
+    d = len(ship)
+    possible_ship = copy.deepcopy(empty_ship)
+    set_possible_cells = set()
+    open_cells = info['open_cell']
+
+    if visualize:
+        visualize_ship(ship, None, title = "Initial Ship")
+
+    # initialize set of possible cells - all open cells
+
+    for i in range(d):
+        for j in range(d):
+            if empty_ship[i][j] == 0:
+                possible_ship[i][j] = 2
+                set_possible_cells.add((i,j))
+    
+    if visualize:
+        visualize_possible_cells(empty_ship, set_possible_cells, title = "Visualize Possible Cells")
+        visualize_ship(possible_ship, None, title = "Possible Ship")
+
+    
+    # dead end: three blocked neighbors
+    # corner: two adjacent directions are blocked (left/down, right/up, right/down, left/up)
+
+    set_targets = set()
+
+    for cell in set_possible_cells:
+        blocked = []
+        for dr, dc in directions:
+            nr, nc = cell[0] + dr, cell[1] + dc
+            if empty_ship[nr][nc] == 1:
+                blocked.append((dr, dc))
+        if len(blocked) == 3:
+            set_targets.add(cell)
+        elif len(blocked) == 2:
+            if blocked[0][0] + blocked[1][0] != 0:
+                set_targets.add(cell)
+
+    num_samples = 100
+    histogram = dict()
+    for L_size in tqdm(range(len(set_possible_cells), 1, -1)):
+        avg = 0
+        for i in range(num_samples):
+            sample = random.sample(list(set_possible_cells), L_size)
+            avg += run(set_targets, empty_ship, set(sample), False)
+        avg/=num_samples
+        histogram[L_size] = avg
+
+    with open("localization_results.txt", "w") as f:
+        for L_size in sorted(histogram.keys(), reverse=True):
+            avg_moves = histogram[L_size]
+            f.write(f"L_size = {L_size}, Average Moves = {avg_moves:.2f}\n")
+
+
+    # L_size = len(set_possible_cells) - 20
+    # sample = random.sample(list(set_possible_cells), L_size)
+
+    # if visualize:
+    #     visualize_possible_cells(ship, sample, title = "sample of L - 20")
+                           
+            
+    # if visualize:
+    #     visualize_possible_cells(empty_ship, set_targets, title = "Set Targets")
+    
+    print(histogram)
+
+
+def run(set_targets, empty_ship, set_possible_cells, visualize):
+    iterations = 0
+    while len(set_possible_cells) > 1:
+        target_cell = random.choice(list(set_targets))
+        start_cell = random.choice(list(set_possible_cells))
+        path = astar(start_cell,empty_ship,target_cell)
+        prev_cell = start_cell
+        for i in range(len(path)):
+            curr_cell = path[i]
+            move = (curr_cell[0]-prev_cell[0], curr_cell[1] - prev_cell[1])
+            new_set_possible_cells = update_location_set(set_possible_cells, empty_ship, move)
+            if visualize:
+                visualize_possible_cells(empty_ship, new_set_possible_cells, title=f"set_possible_cells is size {len(set_possible_cells)} at iteration {iterations} after moving {move}")
+            set_possible_cells = new_set_possible_cells
+            if len(set_possible_cells) == 1:
+                break
+            prev_cell = curr_cell
+            iterations +=1
+    return iterations
+
+def update_location_set(L, ship, move):
+
+    new_L = set()
+
+    for possible_cell in L:
+        
+        new_r = possible_cell[0] + move[0]
+        new_c = possible_cell[1] + move[1]
+        
+        if ship[new_r][new_c] == 1: # next position if moved, but ran into wall
+            new_L.add(possible_cell)
+        else:
+            new_L.add((new_r, new_c)) # next position if moved, successfully
+
+    return new_L
+
 
 # A* algorithm to find shortest path from any start position to any end position 
 def astar(start, map, end):
@@ -161,8 +273,12 @@ def main():
     random.seed(21)
 
     og_info = init_ship(30)
+    # visualize_ship(og_info['ship'], None)
 
-    visualize_ship(og_info['ship'], None)
+    random.seed()
+
+    iterations = bot(og_info, visualize = False)
+    print(iterations)
 
 if __name__ == "__main__":
     main()

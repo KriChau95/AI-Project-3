@@ -26,7 +26,7 @@ def visualize_possible_cells(ship, cells, title = ""):
             img[i][j] = mcolors.to_rgb(color_map[ship[i][j]]) 
 
     for cell in cells:
-        img[cell[0]][cell[1]] = mcolors.to_rgb('c') 
+        img[cell[0]][cell[1]] = mcolors.to_rgb('deepskyblue') 
     
     # display the graph
     plt.imshow(img, interpolation='nearest')
