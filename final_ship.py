@@ -14,8 +14,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 # setting up global variables that are used for adjacency in searches
+
+# array to store adjacent directions needed during various traversal
 global directions
-directions = [(0,1), (0,-1), (1,0), (-1,0)] # array to store adjacent directions needed during various traversal
+directions = [(0,1), (0,-1), (1,0), (-1,0)]
 global diagonal_directions
 diagonal_directions = [(0,1), (0,-1), (1,0), (-1,0), (-1,1), (-1,-1), (1,1), (1,-1)]
 
@@ -128,17 +130,14 @@ def init_ship(dimension):
     return info
 
 def bot(info, visualize):
-    import pickle
 
+    # Initialize variables and extract relevant information from info
     empty_ship = info['empty_ship']
     ship = info['ship']
     d = len(ship)
     possible_ship = copy.deepcopy(empty_ship)
     set_possible_cells = set()
     open_cells = info['open_cell']
-
-    if visualize:
-        visualize_ship(ship, None, title="Initial Ship")
 
     # Initialize set of possible cells
     for i in range(d):
@@ -152,6 +151,8 @@ def bot(info, visualize):
         visualize_ship(possible_ship, None, title="Possible Ship")
 
     # Identify target locations (deadends + corners)
+
+    # Find dead ends
     set_targets = set()
     for cell in set_possible_cells:
         blocked = []
@@ -162,9 +163,11 @@ def bot(info, visualize):
         if len(blocked) == 3:
             set_targets.add(cell)
 
+
+    # Finding corners by choosing closest open cells to the corner of the ship
     rows, cols = len(empty_ship), len(empty_ship[0])
     corner_coords = [(0, 0), (0, cols - 1), (rows - 1, 0), (rows - 1, cols - 1)]
-
+    
     def find_nearest_open(r0, c0):
         visited = set()
         q = deque([(r0, c0)])
@@ -193,79 +196,52 @@ def bot(info, visualize):
     if visualize:
         visualize_possible_cells(ship, set_targets, "Deadends + Corners")
 
-    # === Initialization ===
-    avg_remaining_moves_map = defaultdict(lambda: [0, 0])
+    
+    # Main loop: initialize data and label arrays, and start generating samples
+    avg_remaining_moves_map = defaultdict(int)
     data = []
     labels = []
 
-    # === Phase 1: Natural random targets ===
-    # print("Phase 1: Random target selection")
-    num_runs = 100
-    # for _ in tqdm(range(num_runs)):
-    #     for _ in range(3):
-    #         target_cell = random.choice(list(set_targets))
-    #         map_snaps, L_list, iterations = run(target_cell, empty_ship, set_possible_cells.copy(), visualize)
-    #         if iterations >= 1000:
-    #             continue
-    #         remaining_moves = list(range(len(L_list) - 1, -1, -1))
-    #         data.extend(map_snaps)
-    #         labels.extend(remaining_moves)
-
-    #         for item in set(L_list):
-    #             first_occ = L_list.index(item)
-    #             last_occ = len(L_list) - L_list[::-1].index(item)
-    #             midpoint = first_occ + (last_occ - first_occ) // 2
-    #             remaining = len(L_list) - 1 - midpoint
-    #             avg_remaining_moves_map[item][0] += remaining
-    #             avg_remaining_moves_map[item][1] += 1
-
-    # === Phase 2: Fixed |L| sampling ===
-    print("Phase 2: Fixed L size")
-    target_L_sizes = range(300, 546, 3)
-    samples_per_L = 10
-    histogram = dict()
+    # Generating 150 samples for each L size
+    target_L_sizes = list(range(2,600,1))
+    samples_per_L = 150
 
     for L_size in tqdm(target_L_sizes):
+        
+        num_samples = 0
+
         if L_size > len(open_cells):
-            continue
+            break
 
-        total_moves = 0
-        for _ in range(samples_per_L):
-            target_cell = random.choice(list(set_targets))
-            possible_sample = set(random.sample(list(open_cells), L_size))
-            map_snaps, L_list, iterations = run(target_cell, empty_ship, possible_sample, visualize=False)
+        while num_samples < samples_per_L:
 
+            target = random.choice(list(set_targets))
+            
+            L_initial = set(random.sample(list(open_cells), L_size))
 
+            map_snaps, L_list, iterations = run(target, empty_ship, L_initial, visualize = False)
+
+            start_map = map_snaps[0]
+            
             if iterations >= 1000:
                 continue
-            total_moves += iterations
-            remaining_moves = list(range(len(L_list) - 1, -1, -1))
-            data.extend(map_snaps)
-            labels.extend(remaining_moves)
+                
+            num_samples += 1
 
-            for item in set(L_list):
-                first_occ = L_list.index(item)
-                last_occ = len(L_list) - L_list[::-1].index(item)
-                midpoint = first_occ + (last_occ - first_occ) // 2
-                remaining = len(L_list) - 1 - midpoint
-                avg_remaining_moves_map[item][0] += remaining
-                avg_remaining_moves_map[item][1] += 1
+            data.append(start_map)
+            labels.append(iterations)
 
-        histogram[L_size] = total_moves / samples_per_L
+            avg_remaining_moves_map[L_size] += iterations
 
-    # === Finalize average map ===
+    # Averaging generated data 
     for L_size in avg_remaining_moves_map:
-        total, count = avg_remaining_moves_map[L_size]
-        avg_remaining_moves_map[L_size] = total / count
+        total = avg_remaining_moves_map[L_size]
+        avg_remaining_moves_map[L_size] = total / samples_per_L
 
-    # === Save outputs ===
+    # Save data
     with open("avg_remaining_moves.txt", "w") as f:
         for L_size in sorted(avg_remaining_moves_map):
             f.write(f"{L_size}: {avg_remaining_moves_map[L_size]:.4f}\n")
-
-    with open("localization_results.txt", "w") as f:
-        for L_size in sorted(histogram.keys()):
-            f.write(f"{L_size}: {histogram[L_size]:.2f}\n")
 
     with open("data.pkl", "wb") as f:
         pickle.dump(data, f)
@@ -275,9 +251,11 @@ def bot(info, visualize):
 
     print(f"Saved {len(data)} data samples and labels.")
 
-def bot_2(info, visualize, model):
-    import pickle
 
+# Generate Policy 1 data. Takes in model trained on Policy 0 (base bot)
+def bot_2(info, visualize, model):
+
+    # Initialize variables and extract relevant information from info
     empty_ship = info['empty_ship']
     ship = info['ship']
     d = len(ship)
@@ -285,8 +263,177 @@ def bot_2(info, visualize, model):
     set_possible_cells = set()
     open_cells = info['open_cell']
 
+    # Initialize set of possible cells
+    for i in range(d):
+        for j in range(d):
+            if empty_ship[i][j] == 0:
+                possible_ship[i][j] = 2
+                set_possible_cells.add((i, j))
+
     if visualize:
-        visualize_ship(ship, None, title="Initial Ship")
+        visualize_possible_cells(empty_ship, set_possible_cells, title="Visualize Possible Cells")
+        visualize_ship(possible_ship, None, title="Possible Ship")
+
+    # Identify target locations (deadends + corners)
+
+    # Find dead ends
+    set_targets = set()
+    for cell in set_possible_cells:
+        blocked = []
+        for dr, dc in directions:
+            nr, nc = cell[0] + dr, cell[1] + dc
+            if empty_ship[nr][nc] == 1:
+                blocked.append((dr, dc))
+        if len(blocked) == 3:
+            set_targets.add(cell)
+
+
+    # Finding corners by choosing closest open cells to the corner of the ship
+    rows, cols = len(empty_ship), len(empty_ship[0])
+    corner_coords = [(0, 0), (0, cols - 1), (rows - 1, 0), (rows - 1, cols - 1)]
+    
+    def find_nearest_open(r0, c0):
+        visited = set()
+        q = deque([(r0, c0)])
+        while q:
+            next_layer = deque()
+            result = []
+            for _ in range(len(q)):
+                r, c = q.popleft()
+                if 0 <= r < rows and 0 <= c < cols and empty_ship[r][c] == 0:
+                    result.append((r, c))
+                else:
+                    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nr, nc = r + dr, c + dc
+                        if (nr, nc) not in visited:
+                            visited.add((nr, nc))
+                            next_layer.append((nr, nc))
+            if result:
+                return result
+            q = next_layer
+        return []
+
+    for r0, c0 in corner_coords:
+        for oc in find_nearest_open(r0, c0):
+            set_targets.add(oc)
+
+    if visualize:
+        visualize_possible_cells(ship, set_targets, "Deadends + Corners")
+
+    # Initialize avg remaining move map to compare Policy 1 to Policy 0
+    avg_remaining_moves_map = defaultdict(int)
+    avg_remaining_moves_map_2 = defaultdict(int)
+
+
+    # Main loop: initialize data and label arrays, and start generating samples
+    data = []
+    labels = []
+
+    data_2 = []
+    labels_2 = []
+
+    target_L_sizes = list(range(2,600,1))
+
+    # Generating 100 samples for each L size
+    samples_per_L = 100
+
+    for L_size in tqdm(target_L_sizes):
+
+        if L_size > len(open_cells):
+            break
+
+        num_samples = 0
+
+        while num_samples < samples_per_L:
+
+            target = random.choice(list(set_targets))
+            
+            L_initial = set(random.sample(list(open_cells), L_size))
+            
+            best_dir = (0, 0)
+
+            lowest_moves = float('inf')
+
+            for move in directions:
+
+                moved_sample = update_location_set(L_initial, empty_ship, move)
+                # visualize_possible_cells(empty_ship, moved_sample, title = f"Move {move}")
+                
+                map_copy = copy.deepcopy(empty_ship)
+                for r, c in moved_sample:
+                    map_copy[r][c] = -1
+
+                input_tensor = torch.tensor(np.array(map_copy), dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+                
+                with torch.no_grad():
+                    prediction = model(input_tensor).item() 
+                    # print(prediction, move)
+                    if prediction < lowest_moves:
+                        lowest_moves = prediction
+                        best_sample = moved_sample
+
+            map_snaps, L_list, iterations = run(target, empty_ship, L_initial, visualize = False)
+            map_snaps_2, L_list_2, iterations_2 = run(target, empty_ship, best_sample, visualize=False)
+            iterations_2+=1
+
+            start_map = map_snaps[0]
+            
+            if iterations >= 1000 or iterations_2>=1000:
+                continue
+                
+            num_samples += 1
+
+            data.append(start_map)
+            labels.append(iterations)
+
+            data_2.append(start_map)
+            labels_2.append(iterations_2)
+
+            avg_remaining_moves_map[L_size] += iterations
+            avg_remaining_moves_map_2[L_size] += iterations_2
+
+    # Averaging generated data 
+    for L_size in avg_remaining_moves_map:
+        total = avg_remaining_moves_map[L_size]
+        avg_remaining_moves_map[L_size] = total / samples_per_L
+
+    for L_size in avg_remaining_moves_map_2:
+        total = avg_remaining_moves_map_2[L_size]
+        avg_remaining_moves_map_2[L_size] = total / samples_per_L
+
+    # Save data
+    with open("avg_remaining_moves.txt", "w") as f:
+        for L_size in sorted(avg_remaining_moves_map):
+            f.write(f"{L_size}: {avg_remaining_moves_map[L_size]:.4f}\n")
+
+    with open("avg_remaining_moves_2.txt", "w") as f:
+        for L_size in sorted(avg_remaining_moves_map_2):
+            f.write(f"{L_size}: {avg_remaining_moves_map_2[L_size]:.4f}\n")
+
+    # with open("data.pkl", "wb") as f:
+    #     pickle.dump(data, f)
+
+    # with open("labels.pkl", "wb") as f:
+    #     pickle.dump(labels, f)
+
+    with open("data_2.pkl", "wb") as f:
+        pickle.dump(data_2, f)
+
+    with open("labels_2.pkl", "wb") as f:
+        pickle.dump(labels_2, f)
+
+    print(f"Saved {len(data)} data samples and labels.")
+
+
+# Compare predicted vs actual for our bot
+def bot_comp_avg(info, visualize, model):
+
+    empty_ship = info['empty_ship']
+    ship = info['ship']
+    d = len(ship)
+    possible_ship = copy.deepcopy(empty_ship)
+    set_possible_cells = set()
+    open_cells = info['open_cell']
 
     # Initialize set of possible cells
     for i in range(d):
@@ -341,49 +488,150 @@ def bot_2(info, visualize, model):
     if visualize:
         visualize_possible_cells(ship, set_targets, "Deadends + Corners")
 
-    # === Initialization ===
-    avg_remaining_moves_map = defaultdict(lambda: [0, 0])
-    data = []
-    labels = []
+    #Main loop, generate 150 samples per L and compare
+    avg_remaining_moves_map = defaultdict(int)
 
-    avg_remaining_moves_map_2 = defaultdict(lambda: [0, 0])
-    data_2 = []
-    labels_2 = []
-
-    # === Phase 1: Natural random targets ===
-    # print("Phase 1: Random target selection")
-    num_runs = 100
-   
-    print("Phase 2: Fixed L size")
-    target_L_sizes = range(2, 500, 5)
-    samples_per_L = 10
-    histogram = dict()
+    target_L_sizes = list(range(2,600,1))
+    samples_per_L = 150
 
     for L_size in tqdm(target_L_sizes):
 
         if L_size > len(open_cells):
-            continue
+            break
 
-        total_moves = 0
-        for _ in range(samples_per_L):
+        num_samples = 0
 
-            # print("L_size:", L_size, "sample:", _)
+        while num_samples < samples_per_L:
+            
+            L_initial = set(random.sample(list(open_cells), L_size))
 
-            target_cell = random.choice(list(set_targets))
-            possible_sample = set(random.sample(list(open_cells), L_size))
+            map_copy = copy.deepcopy(empty_ship)
+            for r, c in L_initial:
+                map_copy[r][c] = -1
 
-            # print("possible_sample:", possible_sample)
+            input_tensor = torch.tensor(np.array(map_copy), dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+                
+            with torch.no_grad():
+                prediction = model(input_tensor).item() 
+                
+            num_samples += 1
 
-            best_dir = (0, 0)
+            avg_remaining_moves_map[L_size] += prediction
+
+    # Finalize average map for both
+    for L_size in avg_remaining_moves_map:
+        total = avg_remaining_moves_map[L_size]
+        avg_remaining_moves_map[L_size] = total / samples_per_L
+
+    # Save outputs
+    with open("comp_avg_remaining_moves.txt", "w") as f:
+        for L_size in sorted(avg_remaining_moves_map):
+            f.write(f"{L_size}: {avg_remaining_moves_map[L_size]:.4f}\n")
+
+# Generate Policy 2 data. Takes in model trained on Policy 1 and model trained on Policy 0
+def bot_3(info, visualize, model, model_2):
+
+    # Initialize variables and extract relevant information from info
+    empty_ship = info['empty_ship']
+    ship = info['ship']
+    d = len(ship)
+    possible_ship = copy.deepcopy(empty_ship)
+    set_possible_cells = set()
+    open_cells = info['open_cell']
+
+
+    # Initialize set of possible cells
+    for i in range(d):
+        for j in range(d):
+            if empty_ship[i][j] == 0:
+                possible_ship[i][j] = 2
+                set_possible_cells.add((i, j))
+
+
+
+    if visualize:
+        visualize_possible_cells(empty_ship, set_possible_cells, title="Visualize Possible Cells")
+        visualize_ship(possible_ship, None, title="Possible Ship")
+
+    # Identify target locations (deadends + corners)
+
+    # Find dead ends
+    set_targets = set()
+    for cell in set_possible_cells:
+        blocked = []
+        for dr, dc in directions:
+            nr, nc = cell[0] + dr, cell[1] + dc
+            if empty_ship[nr][nc] == 1:
+                blocked.append((dr, dc))
+        if len(blocked) == 3:
+            set_targets.add(cell)
+
+    # Finding corners by choosing closest open cells to the corner of the ship
+    rows, cols = len(empty_ship), len(empty_ship[0])
+    corner_coords = [(0, 0), (0, cols - 1), (rows - 1, 0), (rows - 1, cols - 1)]
+
+    def find_nearest_open(r0, c0):
+        visited = set()
+        q = deque([(r0, c0)])
+        while q:
+            next_layer = deque()
+            result = []
+            for _ in range(len(q)):
+                r, c = q.popleft()
+                if 0 <= r < rows and 0 <= c < cols and empty_ship[r][c] == 0:
+                    result.append((r, c))
+                else:
+                    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nr, nc = r + dr, c + dc
+                        if (nr, nc) not in visited:
+                            visited.add((nr, nc))
+                            next_layer.append((nr, nc))
+            if result:
+                return result
+            q = next_layer
+        return []
+
+    for r0, c0 in corner_coords:
+        for oc in find_nearest_open(r0, c0):
+            set_targets.add(oc)
+
+    if visualize:
+        visualize_possible_cells(ship, set_targets, "Deadends + Corners")
+
+    # Initialize avg remaining move map to compare Policy 1 to Policy 0
+    avg_remaining_moves_map = defaultdict(int)
+    avg_remaining_moves_map_2 = defaultdict(int)
+
+    # Main loop: initialize data and label arrays, and start generating samples
+    data = []
+    labels = []
+
+    data_2 = []
+    labels_2 = []
+
+    target_L_sizes = list(range(2,600,2))
+
+    # Generating 100 samples for each L size
+    samples_per_L = 100
+
+    for L_size in tqdm(target_L_sizes):
+
+        if L_size > len(open_cells):
+            break
+
+        num_samples = 0
+
+        while num_samples < samples_per_L:
+
+            target = random.choice(list(set_targets))
+            
+            L_initial = set(random.sample(list(open_cells), L_size))
 
             lowest_moves = float('inf')
-            metadata = torch.load("model_metadata.pth")
-            y_min, y_max = metadata["y_min"], metadata["y_max"]
-            
 
             for move in directions:
 
-                moved_sample = update_location_set(possible_sample, empty_ship, move)
+                moved_sample = update_location_set(L_initial, empty_ship, move)
                 # visualize_possible_cells(empty_ship, moved_sample, title = f"Move {move}")
                 
                 map_copy = copy.deepcopy(empty_ship)
@@ -393,115 +641,351 @@ def bot_2(info, visualize, model):
                 input_tensor = torch.tensor(np.array(map_copy), dtype=torch.float32).unsqueeze(0).unsqueeze(0)
                 
                 with torch.no_grad():
-                    normalized_pred = model(input_tensor).item()
-                    prediction = normalized_pred * (y_max - y_min) + y_min
+                    prediction = model_2(input_tensor).item() 
                     # print(prediction, move)
                     if prediction < lowest_moves:
                         lowest_moves = prediction
                         best_sample = moved_sample
 
+            lowest_moves = float('inf')
+            L_initial_2 = best_sample
 
+            for move in directions:
 
-            # print(L_size)
-            # visualize_possible_cells(empty_ship, possible_sample, title = f"Actual Initial State")
-            # visualize_possible_cells(empty_ship, best_sample, title = f"After Moving State")
+                moved_sample = update_location_set(L_initial_2, empty_ship, move)
+                # visualize_possible_cells(empty_ship, moved_sample, title = f"Move {move}")
+                
+                map_copy = copy.deepcopy(empty_ship)
+                for r, c in moved_sample:
+                    map_copy[r][c] = -1
 
-            map_snaps, L_list, iterations = run(target_cell, empty_ship, possible_sample, visualize=False,bot="bot1")
-            map_snaps_2, L_list_2, iterations_2 = run(target_cell, empty_ship, best_sample, visualize=False,bot="bot2")
+                input_tensor = torch.tensor(np.array(map_copy), dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+                
+                with torch.no_grad():
+                    prediction = model(input_tensor).item() 
+                    # print(prediction, move)
+                    if prediction < lowest_moves:
+                        lowest_moves = prediction
+                        best_sample = moved_sample
 
-            start_map = [map_snaps[0]] 
-            start_num_open_cells = L_list[0] 
-            final_iterations = 1 + iterations_2
+            map_snaps, L_list, iterations = run(target, empty_ship, L_initial, visualize = False)
+            map_snaps_2, L_list_2, iterations_2 = run(target, empty_ship, best_sample, visualize=False)
+            iterations_2+=2
 
-            # print(f"bot1: {iterations}, bot2: {iterations_2+1}")
-
-
+            start_map = map_snaps[0]
             
-            if iterations >= 1000 or iterations_2 >= 1000:
+            if iterations >= 1000 or iterations_2>=1000:
                 continue
+                
+            num_samples += 1
 
-            total_moves += iterations
-            remaining_moves = list(range(len(L_list) - 1, -1, -1))
-            data.extend(map_snaps)
-            labels.extend(remaining_moves)
+            data.append(start_map)
+            labels.append(iterations)
 
-            for item in set(L_list):
+            data_2.append(start_map)
+            labels_2.append(iterations_2)
 
-                first_occ = L_list.index(item)
-                last_occ = len(L_list) - L_list[::-1].index(item)
-                midpoint = first_occ + (last_occ - first_occ) // 2
-                remaining = len(L_list) - 1 - midpoint
-                avg_remaining_moves_map[item][0] += remaining
-                avg_remaining_moves_map[item][1] += 1
+            avg_remaining_moves_map[L_size] += iterations
+            avg_remaining_moves_map_2[L_size] += iterations_2
 
-            
-            avg_remaining_moves_map_2[start_num_open_cells][0] += final_iterations
-            avg_remaining_moves_map_2[start_num_open_cells][1] += 1
-
-
-        histogram[L_size] = total_moves / samples_per_L
-
-    # === Finalize average map ===
+    # Averaging generated data 
     for L_size in avg_remaining_moves_map:
-        total, count = avg_remaining_moves_map[L_size]
-        avg_remaining_moves_map[L_size] = total / count
+        total = avg_remaining_moves_map[L_size]
+        avg_remaining_moves_map[L_size] = total / samples_per_L
 
     for L_size in avg_remaining_moves_map_2:
-        total, count = avg_remaining_moves_map_2[L_size]
-        avg_remaining_moves_map_2[L_size] = total / count
+        total = avg_remaining_moves_map_2[L_size]
+        avg_remaining_moves_map_2[L_size] = total / samples_per_L
 
-    # === Save outputs ===
+    # Save data
     with open("avg_remaining_moves.txt", "w") as f:
         for L_size in sorted(avg_remaining_moves_map):
             f.write(f"{L_size}: {avg_remaining_moves_map[L_size]:.4f}\n")
-    
-    with open("avg_remaining_moves_2.txt", "w") as f:
+
+    with open("avg_remaining_moves_3.txt", "w") as f:
         for L_size in sorted(avg_remaining_moves_map_2):
             f.write(f"{L_size}: {avg_remaining_moves_map_2[L_size]:.4f}\n")
-
-    with open("localization_results.txt", "w") as f:
-        for L_size in sorted(histogram.keys()):
-            f.write(f"{L_size}: {histogram[L_size]:.2f}\n")
 
     # with open("data.pkl", "wb") as f:
     #     pickle.dump(data, f)
 
     # with open("labels.pkl", "wb") as f:
-        # pickle.dump(labels, f)
+    #     pickle.dump(labels, f)
+
+    # with open("data_2.pkl", "wb") as f:
+    #     pickle.dump(data_2, f)
+
+    # with open("labels_2.pkl", "wb") as f:
+    #     pickle.dump(labels_2, f)
+
+    with open("data_3.pkl", "wb") as f:
+        pickle.dump(data_2, f)
+
+    with open("labels_3.pkl", "wb") as f:
+        pickle.dump(labels_2, f)
 
     print(f"Saved {len(data)} data samples and labels.")
 
 
-def run(target_cell, empty_ship, set_possible_cells, visualize, bot):
+# Generate Policy 3 data. Takes in models trained on Policy 2, Policy 1 and Policy 0
+def bot_4(info, visualize, model, model_2, model_3):
+
+    # Initialize variables and extract relevant information from info
+    empty_ship = info['empty_ship']
+    ship = info['ship']
+    d = len(ship)
+    possible_ship = copy.deepcopy(empty_ship)
+    set_possible_cells = set()
+    open_cells = info['open_cell']
+
+
+    # Initialize set of possible cells
+    for i in range(d):
+        for j in range(d):
+            if empty_ship[i][j] == 0:
+                possible_ship[i][j] = 2
+                set_possible_cells.add((i, j))
+
+
+
+    if visualize:
+        visualize_possible_cells(empty_ship, set_possible_cells, title="Visualize Possible Cells")
+        visualize_ship(possible_ship, None, title="Possible Ship")
+
+    # Identify target locations (deadends + corners)
+
+    # Find dead ends
+    set_targets = set()
+    for cell in set_possible_cells:
+        blocked = []
+        for dr, dc in directions:
+            nr, nc = cell[0] + dr, cell[1] + dc
+            if empty_ship[nr][nc] == 1:
+                blocked.append((dr, dc))
+        if len(blocked) == 3:
+            set_targets.add(cell)
+
+    # Finding corners by choosing closest open cells to the corner of the ship
+    rows, cols = len(empty_ship), len(empty_ship[0])
+    corner_coords = [(0, 0), (0, cols - 1), (rows - 1, 0), (rows - 1, cols - 1)]
+
+    def find_nearest_open(r0, c0):
+        visited = set()
+        q = deque([(r0, c0)])
+        while q:
+            next_layer = deque()
+            result = []
+            for _ in range(len(q)):
+                r, c = q.popleft()
+                if 0 <= r < rows and 0 <= c < cols and empty_ship[r][c] == 0:
+                    result.append((r, c))
+                else:
+                    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nr, nc = r + dr, c + dc
+                        if (nr, nc) not in visited:
+                            visited.add((nr, nc))
+                            next_layer.append((nr, nc))
+            if result:
+                return result
+            q = next_layer
+        return []
+
+    for r0, c0 in corner_coords:
+        for oc in find_nearest_open(r0, c0):
+            set_targets.add(oc)
+
+    if visualize:
+        visualize_possible_cells(ship, set_targets, "Deadends + Corners")
+
+    # Initialize avg remaining move map to compare Policy 1 to Policy 0
+    avg_remaining_moves_map = defaultdict(int)
+    avg_remaining_moves_map_2 = defaultdict(int)
+
+    # Main loop: initialize data and label arrays, and start generating samples
+    data = []
+    labels = []
+
+    data_2 = []
+    labels_2 = []
+
+    target_L_sizes = list(range(2,600,3))
+
+    # Generating 100 samples for each L size
+    samples_per_L = 100
+
+    for L_size in tqdm(target_L_sizes):
+
+        if L_size > len(open_cells):
+            break
+
+        num_samples = 0
+
+        while num_samples < samples_per_L:
+
+            target = random.choice(list(set_targets))
+            
+            L_initial = set(random.sample(list(open_cells), L_size))
+
+            lowest_moves = float('inf')
+
+            for move in directions:
+
+                moved_sample = update_location_set(L_initial, empty_ship, move)
+                # visualize_possible_cells(empty_ship, moved_sample, title = f"Move {move}")
+                
+                map_copy = copy.deepcopy(empty_ship)
+                for r, c in moved_sample:
+                    map_copy[r][c] = -1
+
+                input_tensor = torch.tensor(np.array(map_copy), dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+                
+                with torch.no_grad():
+                    prediction = model_3(input_tensor).item() 
+                    # print(prediction, move)
+                    if prediction < lowest_moves:
+                        lowest_moves = prediction
+                        best_sample = moved_sample
+
+            lowest_moves = float('inf')
+            L_initial_2 = best_sample
+
+            for move in directions:
+
+                moved_sample = update_location_set(L_initial_2, empty_ship, move)
+                # visualize_possible_cells(empty_ship, moved_sample, title = f"Move {move}")
+                
+                map_copy = copy.deepcopy(empty_ship)
+                for r, c in moved_sample:
+                    map_copy[r][c] = -1
+
+                input_tensor = torch.tensor(np.array(map_copy), dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+                
+                with torch.no_grad():
+                    prediction = model_2(input_tensor).item() 
+                    # print(prediction, move)
+                    if prediction < lowest_moves:
+                        lowest_moves = prediction
+                        best_sample = moved_sample
+
+            lowest_moves = float('inf')
+            L_initial_3 = best_sample
+
+            for move in directions:
+
+                moved_sample = update_location_set(L_initial_3, empty_ship, move)
+                # visualize_possible_cells(empty_ship, moved_sample, title = f"Move {move}")
+                
+                map_copy = copy.deepcopy(empty_ship)
+                for r, c in moved_sample:
+                    map_copy[r][c] = -1
+
+                input_tensor = torch.tensor(np.array(map_copy), dtype=torch.float32).unsqueeze(0).unsqueeze(0)  
+
+                with torch.no_grad():
+                    prediction = model(input_tensor).item() 
+                    # print(prediction, move)
+                    if prediction < lowest_moves:
+                        lowest_moves = prediction
+                        best_sample = moved_sample
+                        
+            
+            map_snaps, L_list, iterations = run(target, empty_ship, L_initial, visualize = False)
+            map_snaps_2, L_list_2, iterations_2 = run(target, empty_ship, best_sample, visualize=False)
+            iterations_2+=3
+
+            start_map = map_snaps[0]
+            
+            if iterations >= 1000 or iterations_2>=1000:
+                continue
+                
+            num_samples += 1
+
+            data.append(start_map)
+            labels.append(iterations)
+
+            data_2.append(start_map)
+            labels_2.append(iterations_2)
+
+            avg_remaining_moves_map[L_size] += iterations
+            avg_remaining_moves_map_2[L_size] += iterations_2
+
+    # Averaging generated data 
+    for L_size in avg_remaining_moves_map:
+        total = avg_remaining_moves_map[L_size]
+        avg_remaining_moves_map[L_size] = total / samples_per_L
+
+    for L_size in avg_remaining_moves_map_2:
+        total = avg_remaining_moves_map_2[L_size]
+        avg_remaining_moves_map_2[L_size] = total / samples_per_L
+
+    # Save data
+    with open("avg_remaining_moves.txt", "w") as f:
+        for L_size in sorted(avg_remaining_moves_map):
+            f.write(f"{L_size}: {avg_remaining_moves_map[L_size]:.4f}\n")
+
+    with open("avg_remaining_moves_4.txt", "w") as f:
+        for L_size in sorted(avg_remaining_moves_map_2):
+            f.write(f"{L_size}: {avg_remaining_moves_map_2[L_size]:.4f}\n")
+
+    # with open("data.pkl", "wb") as f:
+    #     pickle.dump(data, f)
+
+    # with open("labels.pkl", "wb") as f:
+    #     pickle.dump(labels, f)
+
+    # with open("data_2.pkl", "wb") as f:
+    #     pickle.dump(data_2, f)
+
+    # with open("labels_2.pkl", "wb") as f:
+    #     pickle.dump(labels_2, f)
+
+    with open("data_4.pkl", "wb") as f:
+        pickle.dump(data_2, f)
+
+    with open("labels_4.pkl", "wb") as f:
+        pickle.dump(labels_2, f)
+
+    print(f"Saved {len(data)} data samples and labels.")
+
+# Given a set of possible cells and a target, localizes the robot and returns iterations
+def run(target_cell, empty_ship, set_possible_cells, visualize):
     
+    # previous approach used map_snaps to track intermediate states
     map_snaps = [] # snapshot of map at current time state
     L_list = [] # labels
     iterations = 0
-    
 
-    while len(set_possible_cells) > 1 and iterations < 1000:    
-        # print(len(set_possible_cells))
+    curr_map = copy.deepcopy(empty_ship)
+    for r in range(len(curr_map)):
+        for c in range(len(curr_map)):
+            if (r,c) in set_possible_cells:
+                curr_map[r][c] = -1
+    
+    map_snaps.append(curr_map)
+
+    # Choose random start cell, run A* from that cell to target and update map
+    # repeat until we are for sure at one specific ell
+    while len(set_possible_cells) > 1 and iterations < 1000: # bad targets result in infinite loops resulting in >1000 moves
+        
+        # choose a random cell to be the start cell to determine a path to target cell
         start_cell = random.choice(list(set_possible_cells))
         path = astar(start_cell,empty_ship,target_cell)
+        
         prev_cell = start_cell
-        for i in range(len(path)):
-            L_list.append((len(set_possible_cells)))
-            
-            # store input for test data
-            curr_map = copy.deepcopy(empty_ship)
-            for r in range(len(curr_map)):
-                for c in range(len(curr_map)):
-                    if (r,c) in set_possible_cells:
-                        curr_map[r][c] = -1
-            
-            map_snaps.append(curr_map)
+
+        # take the path to the target cell and filter set_possible_cells after each move
+        for i in range(len(path)):      
 
             # print("Here:", iterations, L_list)
             curr_cell = path[i]
+            
             move = (curr_cell[0]-prev_cell[0], curr_cell[1] - prev_cell[1])
+            
             new_set_possible_cells = update_location_set(set_possible_cells, empty_ship, move)
+            
             if visualize and len(set_possible_cells) == 2:
                 visualize_possible_cells(empty_ship, new_set_possible_cells, title=f"set_possible_cells is size {len(new_set_possible_cells)} at iteration {iterations} after moving {move}")
+            
             set_possible_cells = new_set_possible_cells
             prev_cell = curr_cell
             iterations +=1
@@ -509,20 +993,11 @@ def run(target_cell, empty_ship, set_possible_cells, visualize, bot):
                 break
             if iterations == 1000:
                 break
-    L_list.pop(0)
-    map_snaps.pop(0)
-    L_list.append(1)
-    last_map = copy.deepcopy(empty_ship)
-    fr, fc = next(iter(set_possible_cells))
-    last_map[fr][fc] = -1
-    map_snaps.append(last_map)
-
-    # print(len(L_list))
-    # print(len(map_snaps))
 
     return map_snaps, L_list, iterations
 
 
+# Updates location set after a move
 def update_location_set(L, ship, move):
 
     new_L = set()
@@ -576,42 +1051,52 @@ def astar(start, map, end):
                     heapq.heappush(fringe, (est_total_cost, child))
     return []        
 
+# Model architecture
+class CNNModel(nn.Module):
+    def __init__(self):
+        super(CNNModel, self).__init__()
+        self.conv1 = nn.Conv2d(1, 16, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, padding=1)
+        self.pool = nn.MaxPool2d(2, 2)  
+        self.conv3 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.fc1 = nn.Linear(64 * 15 * 15, 128)
+        self.dropout = nn.Dropout(0.1)
+        self.fc2 = nn.Linear(128, 1)
+
+    def forward(self, x):
+        x = F.relu(self.conv1(x))      
+        x = self.pool(F.relu(self.conv2(x))) 
+        x = F.relu(self.conv3(x))       
+        x = x.view(x.size(0), -1)       
+        x = F.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.fc2(x)
+        return x
 
 def main():
     random.seed(21)
-
     og_info = init_ship(30)
-
-    class CNNModel(nn.Module):
-        def __init__(self):
-            super(CNNModel, self).__init__()
-
-            self.conv1 = nn.Conv2d(1, 32, kernel_size=3, stride = 1, padding=1)  
-            self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride = 1, padding=1)  
-            self.pool = nn.MaxPool2d(2, 2) 
-            self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride = 1, padding=1) 
-            self.fc1 = nn.Linear(128 * 15 * 15, 256)  
-            self.fc2 = nn.Linear(256, 1)  
-
-        def forward(self, x):
-            x = F.relu(self.conv1(x)) 
-            x = self.pool(F.relu(self.conv2(x)))  
-            x = F.relu(self.conv3(x))  
-            x = x.view(x.size(0), -1)  
-            x = F.relu(self.fc1(x))  
-            x = self.fc2(x) 
-            return x
     
     model = CNNModel()
     model.load_state_dict(torch.load("model_weights.pth"))
     model.eval()
 
+    model_2 = CNNModel()
+    model_2.load_state_dict(torch.load("model_weights_2.pth"))
+    model_2.eval()
 
+    model_3 = CNNModel()
+    model_3.load_state_dict(torch.load("model_weights_3.pth"))
+    model_3.eval()
 
     # visualize_ship(og_info['ship'], None)
 
-    # bot(og_info, visualize = False)
-    bot_2(og_info, visualize = False, model = model)
+    # bot(og_info, visualize = True)
+    # bot_1(og_info, visualize = True)
+    # bot_2(og_info, visualize = False, model = model)
+    # bot_3(og_info, visualize = False, model = model, model_2 = model_2)
+    bot_4(og_info, visualize = False, model = model, model_2 = model_2, model_3 = model_3)
+
 
 if __name__ == "__main__":
     main()

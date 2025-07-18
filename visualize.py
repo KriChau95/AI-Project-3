@@ -42,12 +42,16 @@ def visualize_possible_cells(ship, cells, title = ""):
 
 
 # visualize ship with bot and rat
-def visualize_ship(ship, path, title="", show=True): 
+def visualize_ship(ship, path, title="", show=True, training_data = False): 
+
+    pc_num = 2
+    if training_data:
+        pc_num = -1
     
     color_map = {
         0: 'white', # Empty space
         1: 'black',  # Wall
-        2: 'deepskyblue',   # Bot
+        pc_num: 'deepskyblue',   # Bot
     }
     
     d = len(ship)
